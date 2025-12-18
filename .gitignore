@@ -60,6 +60,6 @@ logs/
 .cache/
 
 # claude files
-.claude
-.history
+.claude/
+.history/
 CLAUDE.md
