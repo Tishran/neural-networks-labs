@@ -6,69 +6,159 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Tuple, List, Dict, Optional
 import random
+import re
 from collections import Counter
 
 
-# Roman numeral conversion rules
+# Roman numeral conversion rules (standard form for 1-3999)
 ROMAN_NUMERALS = [
     (1000, 'M'), (900, 'CM'), (500, 'D'), (400, 'CD'),
     (100, 'C'), (90, 'XC'), (50, 'L'), (40, 'XL'),
     (10, 'X'), (9, 'IX'), (5, 'V'), (4, 'IV'), (1, 'I')
 ]
 
-# Numbers that use subtractive notation (harder cases)
-HARD_NUMBERS = [
-    4, 9, 14, 19, 24, 29, 34, 39, 40, 44, 49,
-    90, 94, 99, 140, 190, 400, 440, 490,
-    900, 940, 990, 1400, 1900, 1940, 1990,
-    444, 494, 499, 944, 949, 999, 1444, 1494, 1499,
-    1944, 1949, 1999, 2444, 2494, 2499, 2944, 2949, 2999,
-    3444, 3494, 3499, 3944, 3949, 3999,
-    888, 1888, 2888, 3888,  # Long outputs
-]
+# Regex pattern for validating extended Roman numerals (n > 3999)
+# Format: optional vinculum part (underscore-prefixed chars) + optional standard part
+EXTENDED_ROMAN_PATTERN = re.compile(r'^(?:_[IVXLCDM])+[IVXLCDM]*$|^[IVXLCDM]+$')
+
+
+def _standard_roman(num: int) -> str:
+    """Convert number 1-3999 to standard Roman numeral."""
+    if num <= 0 or num > 3999:
+        raise ValueError(f"Standard Roman requires 1-3999, got {num}")
+    result = []
+    for value, numeral in ROMAN_NUMERALS:
+        while num >= value:
+            result.append(numeral)
+            num -= value
+    return ''.join(result)
 
 
 def decimal_to_roman(num: int) -> str:
     """
     Convert decimal number to Roman numeral string.
 
-    Extended to support numbers beyond 3999 by repeating 'M' for thousands.
-    For example: 5000 = MMMMM, 10000 = ten M's, etc.
+    For 1-3999: Standard Roman numerals (I, V, X, L, C, D, M with subtractives).
+    For > 3999: Vinculum notation using underscore prefix for x1000 multiplier.
+                e.g., 4000 = _I_V, 50000 = _L, 100000 = _C
+
+    Args:
+        num: Positive integer to convert
+
+    Returns:
+        Roman numeral string
     """
     if num <= 0:
         raise ValueError(f"Number must be positive, got {num}")
 
+    if num <= 3999:
+        return _standard_roman(num)
+
+    # Extended range: use vinculum (underscore prefix = x1000)
+    thousands = num // 1000  # This part gets vinculum notation
+    remainder = num % 1000   # This part is standard
+
     result = []
 
-    # Handle thousands (extended range - just repeat M)
-    thousands = num // 1000
-    result.append('M' * thousands)
-    num = num % 1000
+    # Convert thousands part to vinculum notation
+    if thousands > 0:
+        if thousands > 3999:
+            raise ValueError(f"Number too large: {num}. Max supported is 3,999,999")
+        thousands_roman = _standard_roman(thousands)
+        # Prefix each character with underscore
+        vinculum_part = ''.join(f'_{c}' for c in thousands_roman)
+        result.append(vinculum_part)
 
-    # Handle remaining with standard Roman numerals
-    for value, numeral in ROMAN_NUMERALS:
-        if value >= 1000:
-            continue  # Already handled thousands
-        while num >= value:
-            result.append(numeral)
-            num -= value
+    # Convert remainder to standard notation
+    if remainder > 0:
+        result.append(_standard_roman(remainder))
 
     return ''.join(result)
 
 
 def roman_to_decimal(roman: str) -> int:
-    """Convert Roman numeral string to decimal number."""
+    """
+    Convert Roman numeral string to decimal number.
+
+    Supports both standard (1-3999) and extended vinculum notation (> 3999).
+
+    Args:
+        roman: Roman numeral string (may include underscore-prefixed chars)
+
+    Returns:
+        Decimal integer value
+    """
+    if not roman:
+        raise ValueError("Empty Roman numeral string")
+
     roman_values = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+
     result = 0
-    prev_value = 0
-    for char in reversed(roman.upper()):
-        value = roman_values[char]
-        if value < prev_value:
-            result -= value
-        else:
-            result += value
-        prev_value = value
+    i = 0
+
+    # Parse vinculum part (underscore-prefixed characters = x1000)
+    vinculum_chars = []
+    while i < len(roman) and roman[i] == '_':
+        if i + 1 >= len(roman):
+            raise ValueError(f"Invalid Roman numeral: underscore at end: {roman}")
+        vinculum_chars.append(roman[i + 1])
+        i += 2
+
+    # Convert vinculum part using standard Roman parsing
+    if vinculum_chars:
+        vinculum_str = ''.join(vinculum_chars)
+        prev_value = 0
+        for char in reversed(vinculum_str):
+            if char not in roman_values:
+                raise ValueError(f"Invalid Roman character: {char}")
+            value = roman_values[char]
+            if value < prev_value:
+                result -= value * 1000
+            else:
+                result += value * 1000
+            prev_value = value
+
+    # Parse standard part (remaining characters)
+    standard_part = roman[i:]
+    if standard_part:
+        prev_value = 0
+        for char in reversed(standard_part):
+            if char not in roman_values:
+                raise ValueError(f"Invalid Roman character: {char}")
+            value = roman_values[char]
+            if value < prev_value:
+                result -= value
+            else:
+                result += value
+            prev_value = value
+
     return result
+
+
+def validate_roman(roman: str, num: int) -> bool:
+    """
+    Validate that a Roman numeral string is correctly formatted.
+
+    For n > 3999: Must match pattern ^(?:_[IVXLCDM])+[IVXLCDM]*$
+    For n <= 3999: Must match pattern ^[IVXLCDM]+$
+
+    Also performs round-trip validation.
+    """
+    if num > 3999:
+        if not EXTENDED_ROMAN_PATTERN.match(roman):
+            return False
+        # Must start with underscore for n > 3999
+        if not roman.startswith('_'):
+            return False
+    else:
+        if not re.match(r'^[IVXLCDM]+$', roman):
+            return False
+
+    # Round-trip check
+    try:
+        return roman_to_decimal(roman) == num
+    except ValueError:
+        return False
 
 
 class Vocabulary:
@@ -114,10 +204,17 @@ class Vocabulary:
         return ''.join(tokens)
 
 
-def create_vocabularies() -> Tuple[Vocabulary, Vocabulary]:
-    """Create source (decimal) and target (Roman) vocabularies."""
+def create_vocabularies(extended: bool = False) -> Tuple[Vocabulary, Vocabulary]:
+    """
+    Create source (decimal) and target (Roman) vocabularies.
+
+    Args:
+        extended: If True, include '_' in target vocab for vinculum notation
+    """
     decimal_chars = list('0123456789')
     roman_chars = list('IVXLCDM')
+    if extended:
+        roman_chars = ['_'] + roman_chars  # Add underscore for vinculum
 
     src_vocab = Vocabulary(decimal_chars)
     tgt_vocab = Vocabulary(roman_chars)
@@ -199,27 +296,21 @@ def create_datasets(
     seed: int = 42,
     max_src_len: Optional[int] = None,
     max_tgt_len: Optional[int] = None,
-    sample_size: Optional[int] = None,
-    stratified: str = 'none'
+    sample_size: Optional[int] = None
 ) -> Tuple[DecimalRomanDataset, DecimalRomanDataset, DecimalRomanDataset, Vocabulary, Vocabulary]:
     """
     Create train, validation, and test datasets.
 
     Args:
         min_num: Minimum number to include
-        max_num: Maximum number to include (can be >3999 for extended range)
+        max_num: Maximum number to include (up to 3,999,999 with vinculum notation)
         train_ratio: Fraction of data for training
         val_ratio: Fraction of data for validation
         test_ratio: Fraction of data for testing
         seed: Random seed for reproducibility
         max_src_len: Maximum source sequence length
         max_tgt_len: Maximum target sequence length
-        sample_size: If provided, sample this many numbers from the range (for large ranges)
-        stratified: Stratification method:
-            - 'none': No stratification (random sampling)
-            - 'input': Stratify by input length (number of digits)
-            - 'output': Stratify by output length (Roman numeral length)
-            - 'diversity': Stratify by output character diversity (best for varied patterns)
+        sample_size: If provided, sample this many numbers from the range
 
     Returns:
         Tuple of (train_dataset, val_dataset, test_dataset, src_vocab, tgt_vocab)
@@ -228,154 +319,13 @@ def create_datasets(
 
     random.seed(seed)
 
-    all_numbers_full = list(range(min_num, max_num + 1))
+    # Generate all numbers
+    all_numbers = list(range(min_num, max_num + 1))
+    random.shuffle(all_numbers)
 
-    if stratified == 'diversity' and sample_size is not None:
-        # Stratify by OUTPUT CHARACTER DIVERSITY
-        # Group numbers by the ratio of non-M characters (more diverse = better)
-        # Buckets: 0-10%, 10-20%, ..., 90-100% non-M characters
-        diversity_buckets = {i: [] for i in range(11)}  # 0-10 representing 0-100%
-
-        for n in all_numbers_full:
-            roman = decimal_to_roman(n)
-            if len(roman) == 0:
-                continue
-            non_m_ratio = (len(roman) - roman.count('M')) / len(roman)
-            bucket_idx = min(10, int(non_m_ratio * 10))
-            diversity_buckets[bucket_idx].append(n)
-
-        # Shuffle each bucket
-        for nums in diversity_buckets.values():
-            random.shuffle(nums)
-
-        # Prioritize high-diversity buckets (more non-M chars)
-        # Give more weight to buckets with higher diversity
-        buckets = list(range(11))
-        remaining_samples = sample_size
-        bucket_samples = {b: 0 for b in buckets}
-
-        # First pass: equal allocation
-        remaining_buckets = sum(1 for b in buckets if len(diversity_buckets[b]) > 0)
-        for b in buckets:
-            if len(diversity_buckets[b]) == 0:
-                continue
-            target = remaining_samples // remaining_buckets
-            actual = min(target, len(diversity_buckets[b]))
-            bucket_samples[b] = actual
-            remaining_samples -= actual
-            remaining_buckets -= 1
-
-        # Second pass: redistribute remaining
-        while remaining_samples > 0:
-            distributed = False
-            for b in buckets:
-                if bucket_samples[b] < len(diversity_buckets[b]) and remaining_samples > 0:
-                    bucket_samples[b] += 1
-                    remaining_samples -= 1
-                    distributed = True
-            if not distributed:
-                break
-
-        # Collect samples
-        all_numbers = []
-        for b in buckets:
-            all_numbers.extend(diversity_buckets[b][:bucket_samples[b]])
-
-        random.shuffle(all_numbers)
-
-    elif stratified == 'output' and sample_size is not None:
-        # Stratify by OUTPUT length (Roman numeral length) for better diversity
-        # Group numbers by their Roman numeral length
-        length_to_nums = {}
-        for n in all_numbers_full:
-            roman_len = len(decimal_to_roman(n))
-            if roman_len not in length_to_nums:
-                length_to_nums[roman_len] = []
-            length_to_nums[roman_len].append(n)
-
-        # Shuffle each bucket
-        for nums in length_to_nums.values():
-            random.shuffle(nums)
-
-        # Calculate samples per bucket with redistribution
-        buckets = sorted(length_to_nums.keys())
-        remaining_samples = sample_size
-        bucket_samples = {b: 0 for b in buckets}
-
-        # First pass: equal allocation capped by bucket size
-        remaining_buckets = len(buckets)
-        for b in buckets:
-            target = remaining_samples // remaining_buckets
-            actual = min(target, len(length_to_nums[b]))
-            bucket_samples[b] = actual
-            remaining_samples -= actual
-            remaining_buckets -= 1
-
-        # Second pass: redistribute remaining to larger buckets
-        while remaining_samples > 0:
-            distributed = False
-            for b in buckets:
-                if bucket_samples[b] < len(length_to_nums[b]) and remaining_samples > 0:
-                    bucket_samples[b] += 1
-                    remaining_samples -= 1
-                    distributed = True
-            if not distributed:
-                break
-
-        # Collect samples
-        all_numbers = []
-        for b in buckets:
-            all_numbers.extend(length_to_nums[b][:bucket_samples[b]])
-
-        random.shuffle(all_numbers)
-
-    elif stratified == 'input' and sample_size is not None:
-        # Stratify by INPUT length (number of digits)
-        buckets = []
-        lower = min_num
-        while lower <= max_num:
-            upper = min(lower * 10 - 1, max_num)
-            if lower < 10:
-                upper = min(9, max_num)
-            bucket_nums = list(range(lower, upper + 1))
-            if bucket_nums:
-                random.shuffle(bucket_nums)
-                buckets.append(bucket_nums)
-            lower = upper + 1
-
-        # Calculate samples per bucket with redistribution
-        remaining_samples = sample_size
-        remaining_buckets = len(buckets)
-        bucket_sample_counts = [0] * len(buckets)
-
-        for i, bucket in enumerate(buckets):
-            target = remaining_samples // remaining_buckets
-            actual = min(target, len(bucket))
-            bucket_sample_counts[i] = actual
-            remaining_samples -= actual
-            remaining_buckets -= 1
-
-        while remaining_samples > 0:
-            distributed = False
-            for i, bucket in enumerate(buckets):
-                if bucket_sample_counts[i] < len(bucket) and remaining_samples > 0:
-                    bucket_sample_counts[i] += 1
-                    remaining_samples -= 1
-                    distributed = True
-            if not distributed:
-                break
-
-        all_numbers = []
-        for i, bucket in enumerate(buckets):
-            all_numbers.extend(bucket[:bucket_sample_counts[i]])
-
-        random.shuffle(all_numbers)
-    else:
-        # No stratification - random sampling
-        all_numbers = all_numbers_full
-        random.shuffle(all_numbers)
-        if sample_size is not None and sample_size < len(all_numbers):
-            all_numbers = all_numbers[:sample_size]
+    # Sample if requested
+    if sample_size is not None and sample_size < len(all_numbers):
+        all_numbers = all_numbers[:sample_size]
 
     # Split
     n_total = len(all_numbers)
@@ -386,15 +336,15 @@ def create_datasets(
     val_numbers = all_numbers[n_train:n_train + n_val]
     test_numbers = all_numbers[n_train + n_val:]
 
-    # Create vocabularies
-    src_vocab, tgt_vocab = create_vocabularies()
+    # Create vocabularies (extended if max_num > 3999)
+    extended = max_num > 3999
+    src_vocab, tgt_vocab = create_vocabularies(extended=extended)
 
     # Determine max lengths from actual sampled data
     if max_src_len is None:
         max_src_len = max(len(str(n)) for n in all_numbers)
 
     if max_tgt_len is None:
-        # Calculate longest Roman numeral from actual sampled numbers
         longest_len = max(len(decimal_to_roman(n)) for n in all_numbers)
         max_tgt_len = longest_len + 2  # +2 for SOS, EOS
 
@@ -456,3 +406,76 @@ def get_dataset_statistics(dataset: DecimalRomanDataset) -> Dict:
         'number_range': (min(dataset.numbers), max(dataset.numbers)),
         'num_samples': len(dataset)
     }
+
+
+def run_tests():
+    """Run sanity tests for Roman numeral conversion."""
+    print("Running Roman numeral conversion tests...")
+
+    # Test standard range (1-3999)
+    standard_tests = [
+        (1, 'I'), (4, 'IV'), (9, 'IX'), (49, 'XLIX'),
+        (99, 'XCIX'), (499, 'CDXCIX'), (999, 'CMXCIX'),
+        (3888, 'MMMDCCCLXXXVIII'), (3999, 'MMMCMXCIX')
+    ]
+    for num, expected in standard_tests:
+        result = decimal_to_roman(num)
+        assert result == expected, f"Failed: {num} -> {result}, expected {expected}"
+        assert roman_to_decimal(result) == num, f"Round-trip failed for {num}"
+        assert validate_roman(result, num), f"Validation failed for {num}"
+    print(f"  [OK] Standard range (1-3999): {len(standard_tests)} tests passed")
+
+    # Test extended range (> 3999)
+    extended_tests = [
+        (4000, '_I_V'),
+        (5000, '_V'),
+        (6000, '_V_I'),
+        (10000, '_X'),
+        (49999, '_X_L_I_XCMXCIX'),
+        (50000, '_L'),
+        (100000, '_C'),
+        (500000, '_D'),
+        (1000000, '_M'),
+        (3999999, '_M_M_M_C_M_X_C_I_XCMXCIX'),
+    ]
+    for num, expected in extended_tests:
+        result = decimal_to_roman(num)
+        assert result == expected, f"Failed: {num} -> {result}, expected {expected}"
+        assert roman_to_decimal(result) == num, f"Round-trip failed for {num}"
+        assert validate_roman(result, num), f"Validation failed for {num}"
+    print(f"  [OK] Extended range (> 3999): {len(extended_tests)} tests passed")
+
+    # Test regex pattern for extended numbers
+    for num in [4000, 49999, 50000, 100000]:
+        roman = decimal_to_roman(num)
+        assert EXTENDED_ROMAN_PATTERN.match(roman), f"Pattern mismatch for {num}: {roman}"
+    print("  [OK] Regex pattern validation passed")
+
+    print("All tests passed!")
+
+
+if __name__ == '__main__':
+    run_tests()
+
+    # Demo with sample generation
+    print("\n" + "=" * 60)
+    print("Sample conversions (max_n=100000, samples=200)")
+    print("=" * 60)
+
+    train_ds, val_ds, test_ds, src_vocab, tgt_vocab = create_datasets(
+        min_num=1, max_num=100000, sample_size=200, seed=42
+    )
+
+    # Show specific examples
+    specific = [4000, 49999, 50000, 100000]
+    print("\nSpecific examples:")
+    for num in specific:
+        roman = decimal_to_roman(num)
+        back = roman_to_decimal(roman)
+        print(f"  {num:>6} -> {roman:<20} -> {back} (round-trip: {'OK' if back == num else 'FAIL'})")
+
+    # Show some random samples
+    print("\nRandom samples from dataset:")
+    for i in range(10):
+        sample = train_ds[i]
+        print(f"  {sample['decimal_str']:>6} -> {sample['roman_str']}")

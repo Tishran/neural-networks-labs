@@ -15,7 +15,7 @@ from pathlib import Path
 class DataConfig:
     """Configuration for dataset."""
     min_num: int = 1
-    max_num: int = 500000  # Extended range for longer Roman numerals (~500 char outputs)
+    max_num: int = 3999  # Standard Roman range (use >3999 for vinculum notation)
     train_ratio: float = 0.8
     val_ratio: float = 0.1
     test_ratio: float = 0.1
@@ -51,7 +51,7 @@ class TrainingConfig:
     scheduler_params: Dict[str, Any] = field(default_factory=dict)
     teacher_forcing_ratio: float = 1.0
     teacher_forcing_decay: float = 0.0
-    early_stopping_patience: int = 3
+    early_stopping_patience: int = 2
 
 
 @dataclass
