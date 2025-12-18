@@ -1,0 +1,29 @@
+# PyTorch and related
+torch
+torchvision
+torchaudio
+
+# Data manipulation and computation
+numpy
+pandas
+scipy
+
+# Visualization
+matplotlib
+seaborn
+
+# Jupyter notebooks (minimal)
+notebook
+ipykernel
+
+# Machine learning utilities
+scikit-learn
+
+# Progress bars
+tqdm
+
+# Image processing
+pillow
+
+# Experiment tracking
+tensorboard
