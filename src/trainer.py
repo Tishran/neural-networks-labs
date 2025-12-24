@@ -294,6 +294,65 @@ class Trainer:
                 tokens.append(self.tgt_vocab.idx2token[idx])
         return ''.join(tokens)
 
+    @torch.no_grad()
+    def show_examples(
+        self,
+        data_loader: DataLoader,
+        n_examples: int = 5
+    ) -> List[Dict[str, str]]:
+        """
+        Show sample predictions from the model.
+
+        Args:
+            data_loader: Data loader to sample from
+            n_examples: Number of examples to show
+
+        Returns:
+            List of dicts with 'input', 'target', 'prediction', 'correct'
+        """
+        self.model.eval()
+        examples = []
+
+        for batch in data_loader:
+            src = batch['src'].to(self.device)
+            src_lengths = batch['src_len'].to(self.device)
+            tgt = batch['tgt'].to(self.device)
+            max_len = tgt.size(1)
+
+            # Get predictions using greedy decoding
+            pred_indices, _ = greedy_decode(
+                self.model, src, src_lengths, max_len,
+                self.tgt_vocab.sos_idx, self.tgt_vocab.eos_idx
+            )
+
+            for i in range(min(src.size(0), n_examples - len(examples))):
+                decimal_str = batch['decimal_str'][i]
+                target = batch['roman_str'][i]
+                prediction = self.tgt_vocab.decode(pred_indices[i])
+                correct = prediction == target
+
+                examples.append({
+                    'input': decimal_str,
+                    'target': target,
+                    'prediction': prediction,
+                    'correct': correct
+                })
+
+                if len(examples) >= n_examples:
+                    break
+
+            if len(examples) >= n_examples:
+                break
+
+        return examples
+
+    def print_examples(self, examples: List[Dict[str, str]]):
+        """Print example predictions in a formatted way."""
+        print("  Sample predictions:")
+        for ex in examples:
+            status = "OK" if ex['correct'] else "X"
+            print(f"    [{status}] {ex['input']} -> {ex['prediction']} (target: {ex['target']})")
+
     def fit(
         self,
         train_loader: DataLoader,
@@ -303,7 +362,8 @@ class Trainer:
         teacher_forcing_decay: float = 0.0,
         early_stopping_patience: int = 0,
         checkpoint_dir: Optional[str] = None,
-        verbose: bool = True
+        verbose: bool = True,
+        show_examples: int = 0
     ) -> Dict[str, List[float]]:
         """
         Train model for multiple epochs.
@@ -317,6 +377,7 @@ class Trainer:
             early_stopping_patience: Stop if no improvement for N epochs (0 = disabled)
             checkpoint_dir: Directory to save checkpoints
             verbose: Whether to print progress
+            show_examples: Number of example predictions to show after each epoch (0 = disabled)
 
         Returns:
             Training history
@@ -386,6 +447,11 @@ class Trainer:
                       f"Train Acc: {train_metrics['seq_accuracy']:.2%} | "
                       f"Val Acc: {val_metrics['seq_accuracy']:.2%}"
                       f"{' *' if improved else ''}")
+
+            # Show example predictions
+            if show_examples > 0 and verbose:
+                examples = self.show_examples(val_loader, n_examples=show_examples)
+                self.print_examples(examples)
 
             # Early stopping
             if early_stopping_patience > 0 and self.epochs_without_improvement >= early_stopping_patience:
