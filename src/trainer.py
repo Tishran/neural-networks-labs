@@ -111,12 +111,16 @@ class Trainer:
                     patience=scheduler_params.get('patience', 5)
                 )
 
-        # Training history
+        # Training history (mean and std per epoch)
         self.history = {
             'train_loss': [],
+            'train_loss_std': [],
             'val_loss': [],
+            'val_loss_std': [],
             'train_seq_acc': [],
+            'train_seq_acc_std': [],
             'val_seq_acc': [],
+            'val_seq_acc_std': [],
             'train_char_acc': [],
             'val_char_acc': [],
             'learning_rate': []
@@ -130,7 +134,7 @@ class Trainer:
         self,
         train_loader: DataLoader,
         teacher_forcing_ratio: float = 1.0
-    ) -> Tuple[float, Dict[str, float]]:
+    ) -> Tuple[float, float, Dict[str, float], float]:
         """
         Train for one epoch.
 
@@ -139,10 +143,13 @@ class Trainer:
             teacher_forcing_ratio: Probability of using teacher forcing
 
         Returns:
-            Tuple of (average loss, metrics dict)
+            Tuple of (average loss, loss std, metrics dict, seq_acc std)
         """
+        import numpy as np
+
         self.model.train()
-        total_loss = 0
+        batch_losses = []
+        batch_seq_accs = []
         all_predictions = []
         all_targets = []
 
@@ -175,29 +182,35 @@ class Trainer:
 
             self.optimizer.step()
 
-            total_loss += loss.item()
+            batch_losses.append(loss.item())
 
-            # Get predictions for metrics
+            # Get predictions for metrics (batch-level)
             pred_indices = outputs.argmax(dim=-1)
+            batch_correct = 0
             for i in range(src.size(0)):
                 pred = self._decode_indices(pred_indices[i])
                 target = batch['roman_str'][i]
                 all_predictions.append(pred)
                 all_targets.append(target)
+                if pred == target:
+                    batch_correct += 1
 
+            batch_seq_accs.append(batch_correct / src.size(0))
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
-        avg_loss = total_loss / len(train_loader)
+        avg_loss = np.mean(batch_losses)
+        loss_std = np.std(batch_losses)
+        seq_acc_std = np.std(batch_seq_accs)
         metrics = calculate_metrics(all_predictions, all_targets)
 
-        return avg_loss, metrics
+        return avg_loss, loss_std, metrics, seq_acc_std
 
     @torch.no_grad()
     def evaluate(
         self,
         data_loader: DataLoader,
         use_greedy: bool = True
-    ) -> Tuple[float, Dict[str, float], List[str], List[str]]:
+    ) -> Tuple[float, float, Dict[str, float], float, List[str], List[str]]:
         """
         Evaluate model on a dataset.
 
@@ -206,10 +219,13 @@ class Trainer:
             use_greedy: Whether to use greedy decoding (vs teacher forcing)
 
         Returns:
-            Tuple of (average loss, metrics dict, predictions, targets)
+            Tuple of (average loss, loss std, metrics dict, seq_acc std, predictions, targets)
         """
+        import numpy as np
+
         self.model.eval()
-        total_loss = 0
+        batch_losses = []
+        batch_seq_accs = []
         all_predictions = []
         all_targets = []
         all_decimals = []
@@ -227,9 +243,13 @@ class Trainer:
                     self.tgt_vocab.sos_idx, self.tgt_vocab.eos_idx
                 )
 
+                batch_correct = 0
                 for i in range(src.size(0)):
                     pred = self.tgt_vocab.decode(pred_indices[i])
                     all_predictions.append(pred)
+                    if pred == batch['roman_str'][i]:
+                        batch_correct += 1
+                batch_seq_accs.append(batch_correct / src.size(0))
 
                 # Compute loss with teacher forcing for consistency
                 outputs, _ = self.model(src, src_lengths, tgt, teacher_forcing_ratio=1.0)
@@ -237,26 +257,32 @@ class Trainer:
                 outputs, _ = self.model(src, src_lengths, tgt, teacher_forcing_ratio=1.0)
                 pred_indices = outputs.argmax(dim=-1)
 
+                batch_correct = 0
                 for i in range(src.size(0)):
                     pred = self._decode_indices(pred_indices[i])
                     all_predictions.append(pred)
+                    if pred == batch['roman_str'][i]:
+                        batch_correct += 1
+                batch_seq_accs.append(batch_correct / src.size(0))
 
             # Compute loss
             output_dim = outputs.shape[-1]
             outputs_flat = outputs.reshape(-1, output_dim)
             tgt_flat = tgt[:, 1:].reshape(-1)
             loss = self.criterion(outputs_flat, tgt_flat)
-            total_loss += loss.item()
+            batch_losses.append(loss.item())
 
             # Collect targets
             for i in range(src.size(0)):
                 all_targets.append(batch['roman_str'][i])
                 all_decimals.append(batch['decimal'][i].item())
 
-        avg_loss = total_loss / len(data_loader)
+        avg_loss = np.mean(batch_losses)
+        loss_std = np.std(batch_losses)
+        seq_acc_std = np.std(batch_seq_accs)
         metrics = calculate_metrics(all_predictions, all_targets)
 
-        return avg_loss, metrics, all_predictions, all_targets
+        return avg_loss, loss_std, metrics, seq_acc_std, all_predictions, all_targets
 
     def _decode_indices(self, indices: torch.Tensor) -> str:
         """Decode tensor indices to string, stopping at EOS."""
@@ -306,10 +332,10 @@ class Trainer:
             tf_ratio = max(0.0, teacher_forcing_ratio - teacher_forcing_decay * (epoch - 1))
 
             # Train
-            train_loss, train_metrics = self.train_epoch(train_loader, tf_ratio)
+            train_loss, train_loss_std, train_metrics, train_acc_std = self.train_epoch(train_loader, tf_ratio)
 
             # Evaluate
-            val_loss, val_metrics, _, _ = self.evaluate(val_loader)
+            val_loss, val_loss_std, val_metrics, val_acc_std, _, _ = self.evaluate(val_loader)
 
             # Update scheduler
             if self.scheduler:
@@ -318,12 +344,16 @@ class Trainer:
                 else:
                     self.scheduler.step()
 
-            # Record history
+            # Record history (mean and std)
             current_lr = self.optimizer.param_groups[0]['lr']
             self.history['train_loss'].append(train_loss)
+            self.history['train_loss_std'].append(train_loss_std)
             self.history['val_loss'].append(val_loss)
+            self.history['val_loss_std'].append(val_loss_std)
             self.history['train_seq_acc'].append(train_metrics['seq_accuracy'])
+            self.history['train_seq_acc_std'].append(train_acc_std)
             self.history['val_seq_acc'].append(val_metrics['seq_accuracy'])
+            self.history['val_seq_acc_std'].append(val_acc_std)
             self.history['train_char_acc'].append(train_metrics['char_accuracy'])
             self.history['val_char_acc'].append(val_metrics['char_accuracy'])
             self.history['learning_rate'].append(current_lr)

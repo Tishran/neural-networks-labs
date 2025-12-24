@@ -32,17 +32,25 @@ def plot_training_curves(
     val_losses: List[float],
     train_accs: Optional[List[float]] = None,
     val_accs: Optional[List[float]] = None,
+    train_loss_std: Optional[List[float]] = None,
+    val_loss_std: Optional[List[float]] = None,
+    train_acc_std: Optional[List[float]] = None,
+    val_acc_std: Optional[List[float]] = None,
     title: str = "Training Progress",
     save_path: Optional[str] = None
 ) -> plt.Figure:
     """
-    Plot training and validation curves.
+    Plot training and validation curves with optional std shading.
 
     Args:
         train_losses: Training losses per epoch
         val_losses: Validation losses per epoch
         train_accs: Training accuracies per epoch (optional)
         val_accs: Validation accuracies per epoch (optional)
+        train_loss_std: Std of training loss per epoch (optional)
+        val_loss_std: Std of validation loss per epoch (optional)
+        train_acc_std: Std of training accuracy per epoch (optional)
+        val_acc_std: Std of validation accuracy per epoch (optional)
         title: Plot title
         save_path: Path to save figure (optional)
 
@@ -57,24 +65,55 @@ def plot_training_curves(
     if not has_acc:
         axes = [axes]
 
-    epochs = range(1, len(train_losses) + 1)
+    epochs = np.arange(1, len(train_losses) + 1)
+    train_losses = np.array(train_losses)
+    val_losses = np.array(val_losses)
 
     # Loss plot
     axes[0].plot(epochs, train_losses, 'b-', label='Train Loss', linewidth=2)
     axes[0].plot(epochs, val_losses, 'r-', label='Validation Loss', linewidth=2)
+
+    # Add std shading for losses
+    if train_loss_std is not None:
+        train_loss_std = np.array(train_loss_std)
+        axes[0].fill_between(epochs, train_losses - train_loss_std, train_losses + train_loss_std,
+                              color='blue', alpha=0.2)
+    if val_loss_std is not None:
+        val_loss_std = np.array(val_loss_std)
+        axes[0].fill_between(epochs, val_losses - val_loss_std, val_losses + val_loss_std,
+                              color='red', alpha=0.2)
+
     axes[0].set_xlabel('Epoch')
     axes[0].set_ylabel('Loss')
-    axes[0].set_title('Loss Curves')
+    axes[0].set_title('Loss Curves (shaded = ±1 std)')
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
     # Accuracy plot
     if has_acc:
+        train_accs = np.array(train_accs)
+        val_accs = np.array(val_accs)
+
         axes[1].plot(epochs, train_accs, 'b-', label='Train Accuracy', linewidth=2)
         axes[1].plot(epochs, val_accs, 'r-', label='Validation Accuracy', linewidth=2)
+
+        # Add std shading for accuracies
+        if train_acc_std is not None:
+            train_acc_std = np.array(train_acc_std)
+            axes[1].fill_between(epochs,
+                                  np.clip(train_accs - train_acc_std, 0, 1),
+                                  np.clip(train_accs + train_acc_std, 0, 1),
+                                  color='blue', alpha=0.2)
+        if val_acc_std is not None:
+            val_acc_std = np.array(val_acc_std)
+            axes[1].fill_between(epochs,
+                                  np.clip(val_accs - val_acc_std, 0, 1),
+                                  np.clip(val_accs + val_acc_std, 0, 1),
+                                  color='red', alpha=0.2)
+
         axes[1].set_xlabel('Epoch')
         axes[1].set_ylabel('Accuracy')
-        axes[1].set_title('Accuracy Curves')
+        axes[1].set_title('Accuracy Curves (shaded = ±1 std)')
         axes[1].legend()
         axes[1].grid(True, alpha=0.3)
         axes[1].set_ylim(0, 1)
