@@ -127,6 +127,78 @@ def plot_training_curves(
     return fig
 
 
+
+
+def plot_training_curves_comparison(
+    results_dict: Dict[str, Dict],
+    metric: str = 'loss',
+    title: str = "Training Curves Comparison",
+    save_path: Optional[str] = None
+) -> plt.Figure:
+    """
+    Plot training curves for multiple experiments on the same figure.
+
+    Args:
+        results_dict: Dict mapping experiment name to result dict with 'history' key
+        metric: 'loss' or 'accuracy' to plot
+        title: Plot title
+        save_path: Path to save figure (optional)
+
+    Returns:
+        Matplotlib figure
+    """
+    set_style()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    colors = plt.cm.tab10(np.linspace(0, 1, len(results_dict)))
+
+    for idx, (name, result) in enumerate(results_dict.items()):
+        history = result.get('history', {})
+
+        if metric == 'loss':
+            train_data = history.get('train_loss', [])
+            val_data = history.get('val_loss', [])
+            ylabel = 'Loss'
+        else:  # accuracy
+            train_data = history.get('train_seq_acc', [])
+            val_data = history.get('val_seq_acc', [])
+            ylabel = 'Accuracy'
+
+        if not train_data or not val_data:
+            continue
+
+        epochs = np.arange(1, len(train_data) + 1)
+        color = colors[idx]
+
+        # Train curves
+        axes[0].plot(epochs, train_data, '-', color=color, label=name, linewidth=2)
+        # Validation curves
+        axes[1].plot(epochs, val_data, '-', color=color, label=name, linewidth=2)
+
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel(ylabel)
+    axes[0].set_title(f'Training {ylabel}')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel(ylabel)
+    axes[1].set_title(f'Validation {ylabel}')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    if metric == 'accuracy':
+        axes[0].set_ylim(0, 1)
+        axes[1].set_ylim(0, 1)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+
+    return fig
+
 def plot_attention_matrix(
     attention_weights: List[torch.Tensor],
     src_tokens: List[str],
@@ -459,7 +531,11 @@ def plot_metrics_comparison(
     colors = plt.cm.Set2(np.linspace(0, 1, n_metrics))
 
     for i, metric in enumerate(metric_names):
-        values = [results[m].get(metric, 0) for m in models]
+        values = []
+        for m in models:
+            # Handle both old structure (direct metrics) and new structure (with 'test_metrics' key)
+            metrics = results[m].get('test_metrics', results[m])
+            values.append(metrics.get(metric, 0))
         offset = (i - n_metrics / 2 + 0.5) * width
         bars = ax.bar(x + offset, values, width, label=metric, color=colors[i])
 
@@ -478,7 +554,13 @@ def plot_metrics_comparison(
     ax.set_xticks(x)
     ax.set_xticklabels(models, rotation=45, ha='right')
     ax.legend()
-    ax.set_ylim(0, 1.1)
+
+    # Auto-scale Y-axis: use 0-1.1 for accuracy metrics, auto for others like Levenshtein
+    all_accuracy = all(m in ['seq_accuracy', 'char_accuracy'] for m in metric_names)
+    if all_accuracy:
+        ax.set_ylim(0, 1.1)
+    else:
+        ax.set_ylim(bottom=0)  # Start from 0, auto-scale top
 
     plt.tight_layout()
 
