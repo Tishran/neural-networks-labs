@@ -127,8 +127,6 @@ def plot_training_curves(
     return fig
 
 
-
-
 def plot_training_curves_comparison(
     results_dict: Dict[str, Dict],
     metric: str = 'loss',
