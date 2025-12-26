@@ -296,7 +296,8 @@ def create_datasets(
     seed: int = 42,
     max_src_len: Optional[int] = None,
     max_tgt_len: Optional[int] = None,
-    sample_size: Optional[int] = None
+    sample_size: Optional[int] = None,
+    ensure_all_lengths: bool = True
 ) -> Tuple[DecimalRomanDataset, DecimalRomanDataset, DecimalRomanDataset, Vocabulary, Vocabulary]:
     """
     Create train, validation, and test datasets.
@@ -311,6 +312,8 @@ def create_datasets(
         max_src_len: Maximum source sequence length
         max_tgt_len: Maximum target sequence length
         sample_size: If provided, sample this many numbers from the range
+        ensure_all_lengths: If True, ensure all input lengths (1-digit, 2-digit, etc.)
+                           are represented in the training set
 
     Returns:
         Tuple of (train_dataset, val_dataset, test_dataset, src_vocab, tgt_vocab)
@@ -325,7 +328,60 @@ def create_datasets(
 
     # Sample if requested
     if sample_size is not None and sample_size < len(all_numbers):
-        all_numbers = all_numbers[:sample_size]
+        if ensure_all_lengths:
+            # Stratified sampling: ensure all digit lengths are represented
+            # Group numbers by their digit length
+            by_length = {}
+            for num in range(min_num, max_num + 1):
+                length = len(str(num))
+                if length not in by_length:
+                    by_length[length] = []
+                by_length[length].append(num)
+
+            # Shuffle each group
+            for length in by_length:
+                random.shuffle(by_length[length])
+
+            # FIRST: Include ALL numbers from small groups (1-digit, 2-digit, etc.)
+            # This ensures short sequences are always represented
+            sampled = []
+            small_group_threshold = 100  # Include ALL if group has <= 100 numbers
+
+            for length in sorted(by_length.keys()):
+                nums = by_length[length]
+                if len(nums) <= small_group_threshold:
+                    # Include ALL numbers from small groups
+                    sampled.extend(nums)
+                else:
+                    # For larger groups, calculate proportional + minimum
+                    total_large = sum(len(by_length[l]) for l in by_length if len(by_length[l]) > small_group_threshold)
+                    remaining_budget = sample_size - sum(len(by_length[l]) for l in by_length if len(by_length[l]) <= small_group_threshold)
+
+                    if total_large > 0 and remaining_budget > 0:
+                        proportional = int(remaining_budget * len(nums) / total_large)
+                        n_samples = max(proportional, 100)  # At least 100 from each large group
+                        n_samples = min(n_samples, len(nums))
+                        sampled.extend(nums[:n_samples])
+
+            # If we have fewer samples than requested, add more from larger groups
+            if len(sampled) < sample_size:
+                remaining_needed = sample_size - len(sampled)
+                sampled_set = set(sampled)
+                for length in sorted(by_length.keys(), reverse=True):
+                    if len(by_length[length]) > small_group_threshold:
+                        for num in by_length[length]:
+                            if num not in sampled_set and remaining_needed > 0:
+                                sampled.append(num)
+                                sampled_set.add(num)
+                                remaining_needed -= 1
+                        if remaining_needed <= 0:
+                            break
+
+            # Trim if we oversampled
+            random.shuffle(sampled)
+            all_numbers = sampled[:sample_size]
+        else:
+            all_numbers = all_numbers[:sample_size]
 
     # Split
     n_total = len(all_numbers)

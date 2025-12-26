@@ -292,23 +292,21 @@ def beam_search(
             # Encode
             encoder_outputs, hidden, encoder_mask = model.encode(src_single, src_len_single)
 
-            # Expand for beam search
-            encoder_outputs = encoder_outputs.expand(beam_size, -1, -1)
-            encoder_mask = encoder_mask.expand(beam_size, -1)
+            # Store original encoder outputs for later expansion
+            encoder_outputs_single = encoder_outputs  # [1, src_len, hidden]
+            encoder_mask_single = encoder_mask  # [1, src_len]
 
+            # Initialize beams with hidden state for batch_size=1
+            # Do NOT expand hidden here - each beam stores its own hidden with batch=1
             if model.encoder.cell_type == 'lstm':
-                hidden = (
-                    hidden[0].expand(-1, beam_size, -1).contiguous(),
-                    hidden[1].expand(-1, beam_size, -1).contiguous()
-                )
+                init_hidden = (hidden[0].clone(), hidden[1].clone())
             else:
-                hidden = (hidden[0].expand(-1, beam_size, -1).contiguous(),)
+                init_hidden = (hidden[0].clone(),)
 
-            # Initialize beams
             beams = [BeamHypothesis(
                 tokens=[],
                 score=0.0,
-                hidden=hidden,
+                hidden=init_hidden,
                 attention=[]
             )]
 
@@ -345,8 +343,9 @@ def beam_search(
                 else:
                     batch_hidden = (torch.cat(all_hiddens_h, dim=1),)
 
-                batch_enc_out = encoder_outputs[:num_beams]
-                batch_enc_mask = encoder_mask[:num_beams]
+                # Expand encoder outputs to match number of active beams
+                batch_enc_out = encoder_outputs_single.expand(num_beams, -1, -1)
+                batch_enc_mask = encoder_mask_single.expand(num_beams, -1)
 
                 output, new_hidden, attn_weights = model.decode_step(
                     decoder_input, batch_hidden, batch_enc_out, batch_enc_mask
